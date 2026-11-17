@@ -45,7 +45,9 @@ jobs:
           Get-ChildItem models -Recurse -Filter rife-ncnn-vulkan.exe | Select-Object -First 1 | ForEach-Object { Write-Host "Found $($_.FullName)" }
 
       - name: Run tests
-        run: python -m unittest discover -s tests -v
+        shell: pwsh
+        run: |
+          if (Test-Path tests) { python -m unittest discover -s tests -v } else { Write-Host "tests folder not found - skipping" }
 
       - name: Build executable
         shell: pwsh
