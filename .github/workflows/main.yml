@@ -15,65 +15,20 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      # 1. Checkout
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Extract project
-      - name: Extract project
+      - name: Check project files
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $workspace = $env:GITHUB_WORKSPACE
 
-          if (Test-Path "project.zip") {
-              Expand-Archive project.zip -DestinationPath _project -Force
-
-              $projectRoot = $null
-
-              Get-ChildItem "_project" -Filter "main.py" -File -Recurse | ForEach-Object {
-                  $dir = $_.Directory.FullName
-
-                  if (
-                      (Test-Path "$dir/requirements.txt") -and
-                      (Test-Path "$dir/core") -and
-                      (Test-Path "$dir/engines") -and
-                      (Test-Path "$dir/gui")
-                  ) {
-                      if (-not $projectRoot) {
-                          $projectRoot = $dir
-                      }
-                  }
-              }
-
-              if (-not $projectRoot) {
-                  throw "Project structure is invalid."
-              }
-
-              Get-ChildItem $projectRoot -Force | ForEach-Object {
-                  Copy-Item $_.FullName $workspace -Recurse -Force
+          foreach ($file in @("main.py", "requirements.txt")) {
+              if (-not (Test-Path $file)) {
+                  throw "Missing: $file"
               }
           }
 
-          $required = @(
-              "main.py",
-              "requirements.txt",
-              "core",
-              "engines",
-              "gui"
-          )
-
-          foreach ($item in $required) {
-              if (-not (Test-Path $item)) {
-                  throw "Missing required file: $item"
-              }
-          }
-
-          if (-not (Test-Path "assets")) {
-              New-Item -ItemType Directory assets | Out-Null
-          }
-
-      # 3. Setup Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -81,14 +36,12 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
-      # 4. Install dependencies
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # 5. Download FFmpeg
       - name: Download FFmpeg
         shell: pwsh
         run: |
@@ -109,10 +62,9 @@ jobs:
             }
 
           if (-not (Test-Path "bin/ffmpeg.exe")) {
-              throw "FFmpeg download failed."
+              throw "FFmpeg not found."
           }
 
-      # 6. Download RIFE
       - name: Download RIFE
         shell: pwsh
         run: |
@@ -133,7 +85,6 @@ jobs:
               throw "RIFE executable not found."
           }
 
-      # 7. Build EXE
       - name: Build executable
         shell: pwsh
         run: |
@@ -144,23 +95,25 @@ jobs:
               "--clean",
               "--windowed",
               "--name", "Flowframes-TikTok60FPS-Studio",
-              "--add-data", "assets;assets",
               "--add-data", "bin;bin",
               "--add-data", "models;models",
               "--collect-all", "customtkinter"
           )
 
-          if (Test-Path "assets/icon.ico") {
-              $pyArgs += @("--icon", "assets/icon.ico")
+          if (Test-Path "icon.ico") {
+              $pyArgs += @("--icon", "icon.ico")
+          }
+
+          if (Test-Path "icon.png") {
+              $pyArgs += @("--add-data", "icon.png;.")
           }
 
           pyinstaller @pyArgs main.py
 
           if ($LASTEXITCODE -ne 0) {
-              throw "PyInstaller build failed."
+              throw "Build failed."
           }
 
-      # 8. Package
       - name: Package
         shell: pwsh
         run: |
@@ -169,7 +122,6 @@ jobs:
             -DestinationPath "Flowframes-TikTok60FPS-Studio-win64.zip" `
             -CompressionLevel Optimal
 
-      # 9. Upload artifact
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -178,7 +130,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # 10. GitHub Release
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
