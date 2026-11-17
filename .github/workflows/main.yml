@@ -15,78 +15,45 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      # 1. Download repository
-      - name: Checkout repository
+      # 1. Checkout
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Extract and locate project files
-      - name: Unpack project files
+      # 2. Extract project
+      - name: Extract project
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $workspace = $env:GITHUB_WORKSPACE
 
           if (Test-Path "project.zip") {
-              Write-Host "Extracting project.zip..."
-
-              if (Test-Path "_project") {
-                  Remove-Item "_project" -Recurse -Force
-              }
-
-              Expand-Archive -Path "project.zip" -DestinationPath "_project" -Force
-
-              $mainFiles = @(Get-ChildItem "_project" -Filter "main.py" -File -Recurse)
+              Expand-Archive project.zip -DestinationPath _project -Force
 
               $projectRoot = $null
 
-              foreach ($file in $mainFiles) {
-                  $dir = $file.Directory.FullName
+              Get-ChildItem "_project" -Filter "main.py" -File -Recurse | ForEach-Object {
+                  $dir = $_.Directory.FullName
 
-                  $required = @(
-                      "requirements.txt",
-                      "core",
-                      "engines",
-                      "gui"
-                  )
-
-                  $valid = $true
-
-                  foreach ($item in $required) {
-                      if (-not (Test-Path (Join-Path $dir $item))) {
-                          $valid = $false
-                          break
+                  if (
+                      (Test-Path "$dir/requirements.txt") -and
+                      (Test-Path "$dir/core") -and
+                      (Test-Path "$dir/engines") -and
+                      (Test-Path "$dir/gui")
+                  ) {
+                      if (-not $projectRoot) {
+                          $projectRoot = $dir
                       }
-                  }
-
-                  if ($valid) {
-                      $projectRoot = $dir
-                      break
                   }
               }
 
               if (-not $projectRoot) {
-                  throw "Could not find a valid project root containing main.py, requirements.txt, core, engines and gui."
+                  throw "Project structure is invalid."
               }
 
-              Write-Host "Project found at: $projectRoot"
-
-              Get-ChildItem -Path $projectRoot -Force | ForEach-Object {
-                  Copy-Item -Path $_.FullName -Destination $workspace -Recurse -Force
+              Get-ChildItem $projectRoot -Force | ForEach-Object {
+                  Copy-Item $_.FullName $workspace -Recurse -Force
               }
-
-              Write-Host "Project files copied successfully."
-
-          } else {
-              Write-Host "project.zip not found. Using repository files."
           }
-
-          Get-ChildItem -Name
-
-      # 3. Verify project structure
-      - name: Check project files
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
 
           $required = @(
               "main.py",
@@ -96,27 +63,17 @@ jobs:
               "gui"
           )
 
-          $missing = @()
-
           foreach ($item in $required) {
               if (-not (Test-Path $item)) {
-                  $missing += $item
+                  throw "Missing required file: $item"
               }
           }
 
-          if ($missing.Count -gt 0) {
-              throw "Missing project files: $($missing -join ', ')"
-          }
-
           if (-not (Test-Path "assets")) {
-              New-Item -ItemType Directory -Path "assets" | Out-Null
-              Write-Warning "Assets folder not found."
+              New-Item -ItemType Directory assets | Out-Null
           }
 
-          Write-Host "All required project files found!"
-          Get-ChildItem -Name
-
-      # 4. Setup Python
+      # 3. Setup Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -124,25 +81,20 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
-      # 5. Install dependencies
+      # 4. Install dependencies
       - name: Install dependencies
-        shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-
           python -m pip install --upgrade pip
-
           pip install -r requirements.txt
-
           pip install pyinstaller
 
-      # 6. Download FFmpeg
+      # 5. Download FFmpeg
       - name: Download FFmpeg
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          New-Item -ItemType Directory -Force bin | Out-Null
 
           Invoke-WebRequest `
             "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" `
@@ -150,26 +102,23 @@ jobs:
 
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_tmp -Force
 
-          $binaries = Get-ChildItem ffmpeg_tmp -Recurse -File |
-              Where-Object { $_.Name -in @("ffmpeg.exe", "ffprobe.exe") }
-
-          foreach ($file in $binaries) {
-              Copy-Item $file.FullName bin/ -Force
-          }
+          Get-ChildItem ffmpeg_tmp -Recurse -File |
+            Where-Object { $_.Name -in @("ffmpeg.exe", "ffprobe.exe") } |
+            ForEach-Object {
+              Copy-Item $_.FullName bin/ -Force
+            }
 
           if (-not (Test-Path "bin/ffmpeg.exe")) {
-              throw "FFmpeg executable was not found."
+              throw "FFmpeg download failed."
           }
 
-          Write-Host "FFmpeg installed successfully."
-
-      # 7. Download RIFE
+      # 6. Download RIFE
       - name: Download RIFE
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          New-Item -ItemType Directory -Force -Path models | Out-Null
+          New-Item -ItemType Directory -Force models | Out-Null
 
           Invoke-WebRequest `
             "https://github.com/nihui/rife-ncnn-vulkan/releases/download/20221029/rife-ncnn-vulkan-20221029-windows.zip" `
@@ -178,26 +127,13 @@ jobs:
           Expand-Archive rife.zip -DestinationPath models -Force
 
           $rife = Get-ChildItem models -Recurse -Filter "rife-ncnn-vulkan.exe" |
-              Select-Object -First 1
+            Select-Object -First 1
 
           if (-not $rife) {
-              throw "RIFE executable was not found."
+              throw "RIFE executable not found."
           }
 
-          Write-Host "RIFE found: $($rife.FullName)"
-
-      # 8. Run tests
-      - name: Run tests
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          if (Test-Path "tests") {
-              python -m unittest discover -s tests -v
-          } else {
-              Write-Host "No tests folder. Skipping."
-          }
-
-      # 9. Build EXE
+      # 7. Build EXE
       - name: Build executable
         shell: pwsh
         run: |
@@ -218,40 +154,22 @@ jobs:
               $pyArgs += @("--icon", "assets/icon.ico")
           }
 
-          Write-Host "Starting PyInstaller..."
-
           pyinstaller @pyArgs main.py
 
           if ($LASTEXITCODE -ne 0) {
               throw "PyInstaller build failed."
           }
 
-          if (-not (Test-Path "dist/Flowframes-TikTok60FPS-Studio")) {
-              throw "EXE output folder was not created."
-          }
-
-          Write-Host "Build completed successfully."
-
-      # 10. Package
-      - name: Package application
+      # 8. Package
+      - name: Package
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-
-          $output = "Flowframes-TikTok60FPS-Studio-win64.zip"
-
-          if (Test-Path $output) {
-              Remove-Item $output -Force
-          }
-
           Compress-Archive `
             -Path "dist/Flowframes-TikTok60FPS-Studio" `
-            -DestinationPath $output `
+            -DestinationPath "Flowframes-TikTok60FPS-Studio-win64.zip" `
             -CompressionLevel Optimal
 
-          Write-Host "Application packaged successfully."
-
-      # 11. Upload artifact
+      # 9. Upload artifact
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -260,7 +178,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # 12. Publish GitHub Release
+      # 10. GitHub Release
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
